@@ -5,7 +5,6 @@ import logging
 
 from typing import AsyncIterator, Iterator, AsyncGenerator, Optional
 
-
 def filter_markdown(text: str, allowed_types=None, default=None) -> str:
     """
     Parses code block from a string.
@@ -22,7 +21,6 @@ def filter_markdown(text: str, allowed_types=None, default=None) -> str:
             return match.group("code")
     return default
 
-
 def filter_json(text: str) -> str:
     """
     Parses JSON code block from a string.
@@ -34,7 +32,6 @@ def filter_json(text: str) -> str:
         dict: A dictionary parsed from the JSON code block.
     """
     return filter_markdown(text, ["", "json"], text.strip("^\n "))
-
 
 def find_stop(stop: Optional[list[str]], content: str, chunk: str = None):
     first = -1
@@ -54,14 +51,16 @@ def find_stop(stop: Optional[list[str]], content: str, chunk: str = None):
                 first = 0
     return first, content, chunk
 
-
 def filter_none(**kwargs) -> dict:
-    return {key: value for key, value in kwargs.items() if value is not None}
-
+    return {
+        key: value
+        for key, value in kwargs.items()
+        if value is not None
+    }
 
 async def safe_aclose(generator: AsyncGenerator) -> None:
     try:
-        if generator and hasattr(generator, "aclose"):
+        if generator and hasattr(generator, 'aclose'):
             await generator.aclose()
     except Exception as e:
         logging.warning(f"Error while closing generator: {e}")

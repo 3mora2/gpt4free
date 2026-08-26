@@ -28,17 +28,13 @@ def _prepare_provider_kwargs(
     kwargs: dict,
 ) -> dict:
     extra_body = kwargs.copy()
-    current_api_key = (
-        api_key.get(provider.get_parent()) if isinstance(api_key, dict) else api_key
-    )
+    current_api_key = api_key.get(provider.get_parent()) if isinstance(api_key, dict) else api_key
     if not current_api_key or AppConfig.disable_custom_api_key:
         current_api_key = AuthManager.load_api_key(provider)
     if current_api_key:
         extra_body["api_key"] = current_api_key
     if conversation is not None and hasattr(conversation, provider.__name__):
-        extra_body["conversation"] = JsonConversation(
-            **getattr(conversation, provider.__name__)
-        )
+        extra_body["conversation"] = JsonConversation(**getattr(conversation, provider.__name__))
     return extra_body
 
 
@@ -48,9 +44,10 @@ class RotatedProvider(BaseRetryProvider):
     request and advancing to the next one upon failure. This distributes load and
     retries across multiple providers in a round-robin fashion.
     """
-
     def __init__(
-        self, providers: List[Type[BaseProvider]], shuffle: bool = True
+        self,
+        providers: List[Type[BaseProvider]],
+        shuffle: bool = True
     ) -> None:
         """
         Initialize the RotatedProvider.
@@ -60,12 +57,12 @@ class RotatedProvider(BaseRetryProvider):
                             to randomize the rotation order.
         """
         if not isinstance(providers, list) or len(providers) == 0:
-            raise ValueError("RotatedProvider requires a non-empty list of providers.")
-
+            raise ValueError('RotatedProvider requires a non-empty list of providers.')
+        
         self.providers = providers
         if shuffle:
             random.shuffle(self.providers)
-
+            
         self.current_index = 0
         self.last_provider: Type[BaseProvider] = None
 
@@ -74,15 +71,14 @@ class RotatedProvider(BaseRetryProvider):
         p = self.providers[self.current_index]
         if isinstance(p, str):
             from ..Provider import __getattr__
-
             p = __getattr__(p)
         return p
 
     def _rotate_provider(self) -> None:
         """Rotates to the next provider in the list."""
         self.current_index = (self.current_index + 1) % len(self.providers)
-        # new_provider_name = self.providers[self.current_index].__name__
-        # debug.log(f"Rotated to next provider: {new_provider_name}")
+        #new_provider_name = self.providers[self.current_index].__name__
+        #debug.log(f"Rotated to next provider: {new_provider_name}")
 
     async def create_async_generator(
         self,
@@ -91,7 +87,7 @@ class RotatedProvider(BaseRetryProvider):
         ignored: list[str] = [],
         api_key: str = None,
         conversation: JsonConversation = None,
-        **kwargs,
+        **kwargs
     ) -> AsyncResult:
         """
         Asynchronously create a completion, rotating through providers on failure.
@@ -107,22 +103,19 @@ class RotatedProvider(BaseRetryProvider):
                 continue
 
             alias = _resolve_model(provider, model)
-
+            
             debug.log(f"Attempting provider: {provider.__name__} with model: {alias}")
             yield ProviderInfo(**provider.get_dict(), model=alias)
-
-            extra_body = _prepare_provider_kwargs(
-                provider, api_key, conversation, kwargs
-            )
-
+            
+            extra_body = _prepare_provider_kwargs(provider, api_key, conversation, kwargs)
+            
             try:
                 method = get_async_provider_method(provider)
                 response = method(model=alias, messages=messages, **extra_body)
                 started = False
                 async for chunk in response:
                     if isinstance(chunk, JsonConversation):
-                        if conversation is None:
-                            conversation = JsonConversation()
+                        if conversation is None: conversation = JsonConversation()
                         setattr(conversation, provider.__name__, chunk.get_dict())
                         yield conversation
                     elif chunk:
@@ -131,18 +124,19 @@ class RotatedProvider(BaseRetryProvider):
                             started = True
                 if started:
                     provider.live += 1
-                    return  # Success
+                    return # Success
             except Exception as e:
                 provider.live -= 1
                 exceptions[provider.__name__] = e
                 debug.error(f"{provider.__name__} failed: {e}")
-
+                
         raise_exceptions(exceptions)
-
 
 class IterListProvider(BaseRetryProvider):
     def __init__(
-        self, providers: List[Type[BaseProvider]] = [], shuffle: bool = True
+        self,
+        providers: List[Type[BaseProvider]] = [],
+        shuffle: bool = True
     ) -> None:
         """
         Initialize the BaseRetryProvider.
@@ -164,7 +158,7 @@ class IterListProvider(BaseRetryProvider):
         ignored: list[str] = [],
         api_key: str = None,
         conversation: JsonConversation = None,
-        **kwargs,
+        **kwargs
     ) -> AsyncResult:
         exceptions = {}
         started: bool = False
@@ -174,9 +168,7 @@ class IterListProvider(BaseRetryProvider):
             alias = _resolve_model(provider, model)
             debug.log(f"Using {provider.__name__} provider with model {alias}")
             yield ProviderInfo(**provider.get_dict(), model=alias)
-            extra_body = _prepare_provider_kwargs(
-                provider, api_key, conversation, kwargs
-            )
+            extra_body = _prepare_provider_kwargs(provider, api_key, conversation, kwargs)
             try:
                 method = get_async_provider_method(provider)
                 response = method(model=alias, messages=messages, **extra_body)
@@ -203,7 +195,6 @@ class IterListProvider(BaseRetryProvider):
     def get_providers(self, ignored: list[str] = []) -> list[ProviderType]:
         resolved_providers = []
         from ..Provider import __getattr__
-
         for p in self.providers:
             if isinstance(p, str):
                 try:
@@ -212,11 +203,10 @@ class IterListProvider(BaseRetryProvider):
                     continue
             if getattr(p, "__name__", "") not in ignored:
                 resolved_providers.append(p)
-
+        
         if self.shuffle:
             random.shuffle(resolved_providers)
         return resolved_providers
-
 
 class RetryProvider(IterListProvider):
     def __init__(
@@ -239,7 +229,10 @@ class RetryProvider(IterListProvider):
         self.max_retries = max_retries
 
     async def create_async_generator(
-        self, model: str, messages: Messages, **kwargs
+        self,
+        model: str,
+        messages: Messages,
+        **kwargs
     ) -> AsyncResult:
         exceptions = {}
         started = False
@@ -252,9 +245,7 @@ class RetryProvider(IterListProvider):
             self.last_provider = provider
             for attempt in range(self.max_retries):
                 try:
-                    debug.log(
-                        f"Using {provider.__name__} provider (attempt {attempt + 1})"
-                    )
+                    debug.log(f"Using {provider.__name__} provider (attempt {attempt + 1})")
                     method = get_async_provider_method(provider)
                     response = method(model=model, messages=messages, **kwargs)
                     async for chunk in response:
@@ -269,12 +260,9 @@ class RetryProvider(IterListProvider):
                         print(f"{provider.__name__}: {e.__class__.__name__}: {e}")
             raise_exceptions(exceptions)
         else:
-            async for chunk in super().create_async_generator(
-                model, messages, **kwargs
-            ):
+            async for chunk in super().create_async_generator(model, messages, **kwargs):
                 yield chunk
-
-
+                
 def raise_exceptions(exceptions: dict) -> None:
     """
     Raise a combined exception if any occurred during retries.
@@ -286,14 +274,8 @@ def raise_exceptions(exceptions: dict) -> None:
     if exceptions:
         if len(exceptions) == 1:
             raise list(exceptions.values())[0]
-        raise RetryProviderError(
-            "RetryProvider failed:\n"
-            + "\n".join(
-                [
-                    f"{p}: {type(exception).__name__}: {exception}"
-                    for p, exception in exceptions.items()
-                ]
-            )
-        ) from list(exceptions.values())[0]
+        raise RetryProviderError("RetryProvider failed:\n" + "\n".join([
+            f"{p}: {type(exception).__name__}: {exception}" for p, exception in exceptions.items()
+        ])) from list(exceptions.values())[0]
 
     raise RetryNoProviderError("No content response from any provider. ")

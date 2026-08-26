@@ -1,6 +1,5 @@
 from typing import Awaitable
 
-
 class AsyncDocumentConverterResult:
     """The result of converting a document to Markdown."""
 

@@ -16,7 +16,6 @@ class ChatGptOss(AsyncGeneratorProvider, ProviderModelMixin):
     Free provider for chat-gpt-oss.com
     Supports GPT-5-Nano and GPT-OSS-120B models via SSE streaming.
     """
-
     label = "ChatGptOss"
     url = "https://chat-gpt-oss.com"
     api_endpoint = "https://chat-gpt-oss.com/api/message"
@@ -43,7 +42,11 @@ class ChatGptOss(AsyncGeneratorProvider, ProviderModelMixin):
 
     @classmethod
     async def create_async_generator(
-        cls, model: str, messages: Messages, proxy: str = None, **kwargs
+        cls,
+        model: str,
+        messages: Messages,
+        proxy: str = None,
+        **kwargs
     ) -> AsyncResult:
         model = cls.get_model(model)
 
@@ -114,11 +117,11 @@ class ChatGptOss(AsyncGeneratorProvider, ProviderModelMixin):
                         continue
 
                     if line.startswith("event:"):
-                        event_type = line[len("event:") :].strip()
+                        event_type = line[len("event:"):].strip()
                         continue
 
                     if line.startswith("data:") and event_type == "message":
-                        data_str = line[len("data:") :].strip()
+                        data_str = line[len("data:"):].strip()
                         if not data_str:
                             continue
                         try:

@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Union, Dict, Type
 from ..typing import Messages, CreateResult
 
-
 class BaseProvider(ABC):
     """
     Abstract base class for a provider.
@@ -37,16 +36,11 @@ class BaseProvider(ABC):
         Returns:
             Dict[str, str]: A dictionary with provider's details.
         """
-        return {
-            "name": cls.__name__,
-            "url": cls.url,
-            "label": getattr(cls, "label", None),
-        }
+        return {'name': cls.__name__, 'url': cls.url, 'label': getattr(cls, 'label', None)} 
 
     @classmethod
     def get_parent(cls) -> str:
         return getattr(cls, "parent", cls.__name__)
-
 
 class BaseRetryProvider(BaseProvider):
     """
@@ -64,11 +58,9 @@ class BaseRetryProvider(BaseProvider):
     use_stream_timeout: bool = True
     last_provider: Type[BaseProvider] = None
 
-
 ProviderType = Union[Type[BaseProvider], BaseRetryProvider]
 
-
-class Streaming:
+class Streaming():
     def __init__(self, data: str) -> None:
         self.data = data
 

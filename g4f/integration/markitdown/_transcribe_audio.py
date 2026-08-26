@@ -20,9 +20,7 @@ except ImportError:
     _dependency_exc_info = sys.exc_info()
 
 
-def transcribe_audio(
-    file_stream: BinaryIO, *, audio_format: str = "wav", language: str = None
-) -> str:
+def transcribe_audio(file_stream: BinaryIO, *, audio_format: str = "wav", language: str = None) -> str:
     # Check for installed dependencies
     if _dependency_exc_info is not None:
         raise MissingDependencyException(
@@ -50,9 +48,7 @@ def transcribe_audio(
         if language is None:
             language = "en-US"
         try:
-            transcript = recognizer.recognize_faster_whisper(
-                audio, language=language.split("-")[0]
-            ).strip()
+            transcript = recognizer.recognize_faster_whisper(audio, language=language.split("-")[0]).strip()
         except ImportError:
             transcript = recognizer.recognize_google(audio, language=language).strip()
         return "[No speech detected]" if transcript == "" else transcript.strip()

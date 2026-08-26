@@ -14,7 +14,6 @@ from ...config import SPACE_URL, AppConfig
 from ...errors import MissingAuthError
 from ... import debug
 
-
 class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin):
     base_url = ""
     backup_url = None
@@ -39,7 +38,6 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
         """Get the quota information for the API key."""
         if not api_key:
             from ...tools.run_tools import AuthManager
-
             api_key = AuthManager.load_api_key(cls)
         if api_key and cls.models_needs_auth and cls.quota_url is None:
             cls.quota_url = f"{cls.base_url}/models"
@@ -53,17 +51,19 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
         if not cls.default_model:
             raise NotImplementedError("No default model specified.")
         return await cls.test_api_key(api_key)
-
+    
     @classmethod
     async def test_api_key(cls, api_key: str):
         if api_key in cls._checked_api_keys:
             return cls._checked_api_keys[api_key]
         url = f"{cls.base_url}/chat/completions"
-        headers = {"authorization": f"Bearer {api_key}"} if api_key else {}
+        headers = {
+            "authorization": f"Bearer {api_key}"
+        } if api_key else {}
         json_data = {
             "model": cls.default_model,
             "messages": [{"role": "user", "content": "say only okay"}],
-            "max_tokens": 1,
+            "max_tokens": 1
         }
         async with StreamSession() as session:
             async with session.post(url, headers=headers, json=json_data) as response:
@@ -74,102 +74,46 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
 
     @classmethod
     def is_provider_api_key(cls, api_key: str) -> bool:
-        return (
-            api_key
-            and not api_key.startswith("g4f_")
-            and not api_key.startswith("gfs_")
-        )
+        if cls.backup_url is None:
+            return True
+        return api_key and not api_key.startswith("g4f_") and not api_key.startswith("gfs_")
 
     @classmethod
-    def get_models(
-        cls, api_key: str = None, base_url: str = None, timeout: int = None
-    ) -> list[str]:
+    def get_models(cls, api_key: str = None, base_url: str = None, timeout: int = None) -> list[str]:
         if not cls.models:
             try:
                 if api_key is None and cls.api_key is not None:
                     api_key = cls.api_key
-                if (
-                    not api_key
-                    or AppConfig.disable_custom_api_key
-                    or not cls.is_provider_api_key(api_key)
-                ):
+                if not api_key or AppConfig.disable_custom_api_key or not cls.is_provider_api_key(api_key):
                     from ...tools.run_tools import AuthManager
-
-                    api_key = AuthManager.load_api_key(cls)
+                    api_key = AuthManager.load_api_key(cls) or api_key
                 if base_url is None:
-                    if cls.is_provider_api_key(api_key):
-                        base_url = cls.base_url
-                    else:
-                        if cls.backup_url is None:
-                            api_key = None
-                            base_url = cls.base_url
-                        else:
-                            base_url = cls.backup_url
+                    base_url = cls.base_url
+                    if not cls.is_provider_api_key(api_key):
+                        base_url = cls.backup_url
                     if base_url is None:
-                        raise NotImplementedError(
-                            "No base_url or backup_url specified."
-                        )
+                        raise NotImplementedError("No base_url or backup_url specified.")
                     if base_url.startswith(SPACE_URL) and not api_key:
                         api_key = AppConfig.g4f_space_api_key
                     elif cls.models_needs_auth and not api_key:
                         raise MissingAuthError("API key is required.")
-                elif (
-                    not base_url.startswith(SPACE_URL)
-                    and api_key
-                    and (api_key.startswith("g4f_") or api_key.startswith("gfs_"))
-                ):
+                elif not base_url.startswith(SPACE_URL) and api_key and (api_key.startswith("g4f_") or api_key.startswith("gfs_")):
                     raise ValueError("Invalid API key for the specified base_url.")
 
-                response = requests.get(
-                    f"{base_url}/models",
-                    headers=cls.get_headers(False, api_key),
-                    verify=cls.ssl,
-                    timeout=timeout,
-                )
+                response = requests.get(f"{base_url}/models", headers=cls.get_headers(False, api_key), verify=cls.ssl, timeout=timeout)
                 response.raise_for_status()
                 data = response.json()
-                data = (
-                    data.get("data", data.get("models"))
-                    if isinstance(data, dict)
-                    else data
-                )
+                data = data.get("data", data.get("models")) if isinstance(data, dict) else data
                 if (not cls.needs_auth or cls.models_needs_auth or api_key) and data:
                     cls.live += 1
-                cls.image_models = [
-                    model.get("name")
-                    if cls.use_model_names
-                    else model.get("id", model.get("name"))
-                    for model in data
-                    if model.get("image")
-                    or model.get("type") == "image"
-                    or model.get("supports_images")
-                ]
+                cls.image_models = [model.get("name") if cls.use_model_names else model.get("id", model.get("name")) for model in data if model.get("image") or model.get("type") == "image" or model.get("supports_images")]
                 cls.vision_models = cls.vision_models.copy()
-                cls.vision_models += [
-                    model.get("name")
-                    if cls.use_model_names
-                    else model.get("id", model.get("name"))
-                    for model in data
-                    if model.get("vision")
-                ]
-                cls.models = {
-                    model.get("name")
-                    if cls.use_model_names
-                    else model.get("id", model.get("name")): model
-                    for model in data
-                }
+                cls.vision_models += [model.get("name") if cls.use_model_names else model.get("id", model.get("name")) for model in data if model.get("vision")]
+                cls.models = {model.get("name") if cls.use_model_names else model.get("id", model.get("name")): model for model in data}
                 for key, value in cls.models.items():
                     value.pop("id")
                     cls.models[key] = {"id": key, **value}
-                cls.models_count = {
-                    model.get("name")
-                    if cls.use_model_names
-                    else model.get("id", model.get("name")): len(
-                        model.get("providers", [])
-                    )
-                    for model in data
-                    if len(model.get("providers", [])) > 1
-                }
+                cls.models_count = {model.get("name") if cls.use_model_names else model.get("id", model.get("name")): len(model.get("providers", [])) for model in data if len(model.get("providers", [])) > 1}
                 if cls.sort_models and isinstance(cls.models, list):
                     cls.models.sort()
             except MissingAuthError:
@@ -203,25 +147,10 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
         headers: dict = None,
         impersonate: str = None,
         download_media: bool = True,
-        extra_parameters: list[str] = [
-            "tools",
-            "parallel_tool_calls",
-            "tool_choice",
-            "reasoning_effort",
-            "logit_bias",
-            "modalities",
-            "audio",
-            "stream_options",
-            "include_reasoning",
-            "response_format",
-            "max_completion_tokens",
-            "reasoning_effort",
-            "search_settings",
-            "prompt_cache_key",
-        ],
+        extra_parameters: list[str] = ["tools", "parallel_tool_calls", "tool_choice", "reasoning_effort", "logit_bias", "modalities", "audio", "stream_options", "include_reasoning", "response_format", "max_completion_tokens", "reasoning_effort", "search_settings", "prompt_cache_key"],
         extra_body: dict = None,
         yield_request: bool = True,
-        **kwargs,
+        **kwargs
     ) -> AsyncResult:
         if api_key is None and cls.api_key is not None:
             api_key = cls.api_key
@@ -235,51 +164,19 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
         ) as session:
             model = cls.get_model(model, api_key=api_key, base_url=base_url)
             if base_url is None:
-                if cls.is_provider_api_key(api_key):
-                    base_url = cls.base_url
-                else:
-                    if cls.backup_url is None:
-                        api_key = None
-                        base_url = cls.base_url
-                    else:
-                        base_url = cls.backup_url
-                if base_url is None:
-                    raise NotImplementedError(
-                        "No base_url or backup_url specified."
-                    )
+                base_url = cls.base_url if cls.is_provider_api_key(api_key) else cls.backup_url
 
             # Proxy for image generation feature
             if model and model in cls.image_models or prompt:
                 prompt = format_media_prompt(messages, prompt)
-                size = use_aspect_ratio(
-                    {"width": kwargs.get("width"), "height": kwargs.get("height")},
-                    kwargs.get("aspect_ratio", None),
-                )
-                size = (
-                    {"size": f"{size['width']}x{size['height']}", **size}
-                    if cls.use_image_size and "width" in size and "height" in size
-                    else size
-                )
+                size = use_aspect_ratio({"width": kwargs.get("width"), "height": kwargs.get("height")}, kwargs.get("aspect_ratio", None))
+                size = {"size": f"{size['width']}x{size['height']}", **size} if cls.use_image_size and "width" in size and "height" in size else size
                 data = {"prompt": prompt, "model": model, **size}
 
                 # Handle media if provided
                 if media is not None:
-                    data["image_url"] = next(
-                        iter(
-                            [
-                                data
-                                for data, _ in media
-                                if data
-                                and isinstance(data, str)
-                                and data.startswith("http://")
-                                or data.startswith("https://")
-                            ]
-                        ),
-                        None,
-                    )
-                async with session.post(
-                    f"{base_url.rstrip('/')}/images/generations", json=data, ssl=cls.ssl
-                ) as response:
+                    data["image_url"] = next(iter([data for data, _ in media if data and isinstance(data, str) and data.startswith("http://") or data.startswith("https://")]), None)
+                async with session.post(f"{base_url.rstrip('/')}/images/generations", json=data, ssl=cls.ssl) as response:
                     content_type = response.headers.get("content-type", "")
                     if content_type.startswith("application/json"):
                         data = await response.json()
@@ -292,22 +189,13 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                     else:
                         raise Exception("Unexpected content type: " + content_type)
                     await raise_for_status(response)
-                    yield ImageResponse(
-                        [
-                            f"data:image/png;base64,{image['b64_json']}"
-                            if image.get("url") is None
-                            else image["url"]
-                            for image in data["data"]
-                        ],
-                        prompt,
-                    )
+                    await raise_for_status(response)
+                    yield ImageResponse([f"data:image/png;base64,{image['b64_json']}" if image.get("url") is None else image["url"] for image in data["data"]], prompt)
                 return
 
             if stream or stream is None:
                 kwargs.setdefault("stream_options", {"include_usage": True})
-            extra_parameters = {
-                key: kwargs[key] for key in extra_parameters if key in kwargs
-            }
+            extra_parameters = {key: kwargs[key] for key in extra_parameters if key in kwargs}
             if extra_body is None:
                 extra_body = {}
             data = filter_none(
@@ -321,7 +209,7 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
                 user=user if cls.add_user else None,
                 conversation=conversation.get_dict() if conversation else None,
                 **extra_parameters,
-                **extra_body,
+                **extra_body
             )
             if api_endpoint is None:
                 if api_endpoint is None:
@@ -331,47 +219,25 @@ class OpenaiTemplate(AsyncGeneratorProvider, ProviderModelMixin, RaiseErrorMixin
             if yield_request:
                 yield JsonRequest.from_dict(data)
             async with session.post(api_endpoint, json=data, ssl=cls.ssl) as response:
-                async for chunk in read_response(
-                    response,
-                    stream,
-                    prompt,
-                    cls.get_dict(),
-                    download_media,
-                    yield_request=yield_request,
-                ):
+                async for chunk in read_response(response, stream, prompt, cls.get_dict(), download_media, yield_request=yield_request):
                     yield chunk
 
     @classmethod
-    def get_headers(
-        cls, stream: bool, api_key: str = None, headers: dict = None
-    ) -> dict:
+    def get_headers(cls, stream: bool, api_key: str = None, headers: dict = None) -> dict:
         return {
             "Accept": "text/event-stream" if stream else "application/json",
             "Content-Type": "application/json",
-            **({"Authorization": f"Bearer {api_key}"} if api_key else {}),
-            **({} if headers is None else headers),
+            **(
+                {"Authorization": f"Bearer {api_key}"}
+                if api_key else {}
+            ),
+            **({} if headers is None else headers)
         }
-
-
-async def read_response(
-    response: StreamResponse,
-    stream: bool,
-    prompt: str,
-    provider_info: dict,
-    download_media: bool,
-    yield_request: bool = True,
-) -> AsyncResult:
+    
+async def read_response(response: StreamResponse, stream: bool, prompt: str, provider_info: dict, download_media: bool, yield_request: bool = True) -> AsyncResult:
     if yield_request:
-        yield HeadersResponse.from_dict(
-            {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower().startswith("x-")
-            }
-        )
-    content_type = response.headers.get(
-        "content-type", "text/event-stream" if stream else "application/json"
-    )
+        yield HeadersResponse.from_dict({key: value for key, value in response.headers.items() if key.lower().startswith("x-")})
+    content_type = response.headers.get("content-type", "text/event-stream" if stream else "application/json")
     if content_type.startswith("application/json"):
         data = await response.json()
         if isinstance(data, list):
@@ -395,9 +261,7 @@ async def read_response(
             if "tool_calls" in message:
                 yield ToolCalls(message["tool_calls"])
             if choice:
-                reasoning_content = choice.get("delta", {}).get(
-                    "reasoning_content", choice.get("delta", {}).get("reasoning")
-                )
+                reasoning_content = choice.get("delta", {}).get("reasoning_content", choice.get("delta", {}).get("reasoning"))
                 if reasoning_content:
                     yield Reasoning(reasoning_content, status="")
             audio = message.get("audio", {})
@@ -406,15 +270,8 @@ async def read_response(
                     async for chunk in save_response_media(audio, prompt, [model]):
                         yield chunk
                 else:
-                    yield AudioResponse(
-                        f"data:audio/mpeg;base64,{audio['data']}",
-                        transcript=audio.get("transcript"),
-                    )
-            if (
-                choice
-                and "finish_reason" in choice
-                and choice["finish_reason"] is not None
-            ):
+                    yield AudioResponse(f"data:audio/mpeg;base64,{audio['data']}", transcript=audio.get("transcript"))
+            if choice and "finish_reason" in choice and choice["finish_reason"] is not None:
                 yield FinishReason(choice["finish_reason"])
                 return
     elif content_type.startswith("text/event-stream"):
@@ -444,9 +301,7 @@ async def read_response(
                 tool_calls = choice.get("delta", {}).get("tool_calls")
                 if tool_calls:
                     yield ToolCalls(tool_calls)
-                reasoning_content = choice.get("delta", {}).get(
-                    "reasoning_content", choice.get("delta", {}).get("reasoning")
-                )
+                reasoning_content = choice.get("delta", {}).get("reasoning_content", choice.get("delta", {}).get("reasoning"))
                 if reasoning_content:
                     reasoning = True
                     yield Reasoning(reasoning_content)

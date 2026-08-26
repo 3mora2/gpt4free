@@ -6,7 +6,6 @@ from ..Provider import ProviderUtils
 import g4f.cookies
 import g4f.debug
 
-
 def run_gui_args(args):
     if args.debug:
         g4f.debug.logging = True
@@ -22,7 +21,6 @@ def run_gui_args(args):
                 ProviderUtils.convert[provider].working = False
 
     run_gui(host, port, debug)
-
 
 if __name__ == "__main__":
     parser = gui_parser()

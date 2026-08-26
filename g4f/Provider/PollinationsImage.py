@@ -6,7 +6,6 @@ from .helper import format_media_prompt
 from ..typing import AsyncResult, Messages, MediaListType
 from .Pollinations import Pollinations
 
-
 class PollinationsImage(Pollinations):
     label = "PollinationsImage"
     parent = Pollinations.__name__
@@ -50,7 +49,7 @@ class PollinationsImage(Pollinations):
         safe: bool = False,
         transparent: bool = False,
         n: int = 1,
-        **kwargs,
+        **kwargs
     ) -> AsyncResult:
         # Calling model updates before creating a generator
         cls.get_models()
@@ -74,6 +73,6 @@ class PollinationsImage(Pollinations):
             safe=safe,
             transparent=transparent,
             n=n,
-            api_key=api_key,
+            api_key=api_key
         ):
             yield chunk

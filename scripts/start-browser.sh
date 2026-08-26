@@ -1,19 +1,7 @@
 #!/bin/bash
 
 # Browser selection: chrome (default), chromium, brave, msedge
-BROWSER="chrome"
-HEADLESS=0
-for arg in "$@"; do
-    case "$arg" in
-        --headless) HEADLESS=1 ;;
-        -h|--help)
-            echo "Usage: $0 [chrome|chromium|brave|msedge] [--headless]"
-            exit 0
-            ;;
-        -*) echo "Unknown argument: $arg" >&2; exit 1 ;;
-        *) BROWSER="$arg" ;;
-    esac
-done
+BROWSER="${1:-chrome}"
 
 BROWSER_FLAGS=(
     --remote-allow-origins=*
@@ -33,10 +21,6 @@ BROWSER_FLAGS=(
     --remote-debugging-host=127.0.0.1
     --remote-debugging-port=57011
 )
-
-if [ "$HEADLESS" -eq 1 ]; then
-    BROWSER_FLAGS+=(--headless=new)
-fi
 
 # Resolve a Windows path to the correct format for the current shell environment.
 # Git Bash uses /c/... whereas WSL uses /mnt/c/...

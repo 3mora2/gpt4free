@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..template import OpenaiTemplate
 
-
 class AIBadgr(OpenaiTemplate):
     label = "AI Badgr"
     url = "https://aibadgr.com"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .OpenaiAPI import OpenaiAPI
 
-
 class GithubCopilotAPI(OpenaiAPI):
     label = "GitHub Copilot API"
     url = "https://github.com/copilot"

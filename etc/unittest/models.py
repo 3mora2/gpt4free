@@ -1,5 +1,3 @@
-import asyncio
-import inspect
 import unittest
 from typing import Type
 from requests.exceptions import RequestException
@@ -7,7 +5,7 @@ from requests.exceptions import RequestException
 from g4f.Provider import __getattr__
 from g4f.models import __models__
 from g4f.providers.base_provider import BaseProvider, ProviderModelMixin
-from g4f.errors import MissingRequirementsError, MissingAuthError, PaymentRequiredError
+from g4f.errors import MissingRequirementsError, MissingAuthError
 
 class TestProviderHasModel(unittest.TestCase):
     cache: dict = {}
@@ -26,13 +24,8 @@ class TestProviderHasModel(unittest.TestCase):
                     continue
                 if issubclass(provider, ProviderModelMixin):
                     try:
-                        result = provider.get_models(timeout=5)  # Update models
-                        if inspect.isawaitable(result):
-                            result = asyncio.run(result)
-                        if (
-                            provider.model_aliases
-                            and model.name in provider.model_aliases
-                        ):
+                        provider.get_models(timeout=5) # Update models
+                        if provider.model_aliases and model.name in provider.model_aliases:
                             model_name = provider.model_aliases[model.name]
                         else:
                             model_name = model.get_long_name()
@@ -43,11 +36,8 @@ class TestProviderHasModel(unittest.TestCase):
     def provider_has_model(self, provider: Type[BaseProvider], model: str):
         if provider.__name__ not in self.cache:
             try:
-                provider_models = provider.get_models()
-                if inspect.isawaitable(provider_models):
-                    provider_models = asyncio.run(provider_models)
-                self.cache[provider.__name__] = list(provider_models)
-            except (MissingRequirementsError, PaymentRequiredError, MissingAuthError):
+                self.cache[provider.__name__] = list(provider.get_models())
+            except (MissingRequirementsError, MissingAuthError):
                 return
         if self.cache[provider.__name__]:
             if not provider.model_aliases or model not in provider.model_aliases:
@@ -63,6 +53,4 @@ class TestProviderHasModel(unittest.TestCase):
                         continue
                 if provider is None:
                     continue
-                self.assertTrue(
-                    provider.working, f"{provider.__name__} in {model.name}"
-                )
+                self.assertTrue(provider.working, f"{provider.__name__} in {model.name}")

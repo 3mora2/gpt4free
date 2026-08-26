@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..template.OpenaiTemplate import OpenaiTemplate
 
-
 class xAI(OpenaiTemplate):
     url = "https://console.x.ai"
     login_url = "https://console.x.ai"

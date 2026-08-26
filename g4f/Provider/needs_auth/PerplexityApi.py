@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..template import OpenaiTemplate
 
-
 class PerplexityApi(OpenaiTemplate):
     label = "Perplexity API"
     url = "https://www.perplexity.ai"

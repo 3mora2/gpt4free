@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ...template import OpenaiTemplate
 
-
 class MiniMax(OpenaiTemplate):
     label = "MiniMax API"
     url = "https://www.hailuo.ai/chat"

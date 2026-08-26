@@ -7,7 +7,6 @@ from ...requests import raise_for_status
 from ...requests.aiohttp import StreamSession
 from ...errors import ResponseError, MissingAuthError
 
-
 class Replicate(AsyncGeneratorProvider, ProviderModelMixin):
     url = "https://replicate.com"
     login_url = "https://replicate.com/account/api-tokens"
@@ -34,7 +33,7 @@ class Replicate(AsyncGeneratorProvider, ProviderModelMixin):
         headers: dict = {
             "accept": "application/json",
         },
-        **kwargs,
+        **kwargs
     ) -> AsyncResult:
         model = cls.get_model(model)
         if cls.needs_auth and api_key is None:
@@ -45,7 +44,9 @@ class Replicate(AsyncGeneratorProvider, ProviderModelMixin):
         else:
             base_url = "https://replicate.com/api/models/"
         async with StreamSession(
-            proxy=proxy, headers=headers, timeout=timeout
+            proxy=proxy,
+            headers=headers,
+            timeout=timeout
         ) as session:
             data = {
                 "stream": True,
@@ -57,9 +58,9 @@ class Replicate(AsyncGeneratorProvider, ProviderModelMixin):
                         temperature=temperature,
                         top_p=top_p,
                         top_k=top_k,
-                        stop_sequences=",".join(stop) if stop else None,
+                        stop_sequences=",".join(stop) if stop else None
                     ),
-                    **extra_body,
+                    **extra_body
                 },
             }
             url = f"{base_url.rstrip('/')}/{model}/predictions"
@@ -69,9 +70,7 @@ class Replicate(AsyncGeneratorProvider, ProviderModelMixin):
                 result = await response.json()
                 if "id" not in result:
                     raise ResponseError(f"Invalid response: {result}")
-                async with session.get(
-                    result["urls"]["stream"], headers={"Accept": "text/event-stream"}
-                ) as response:
+                async with session.get(result["urls"]["stream"], headers={"Accept": "text/event-stream"}) as response:
                     await raise_for_status(response)
                     event = None
                     async for line in response.iter_lines():
