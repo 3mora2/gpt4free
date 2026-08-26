@@ -62,12 +62,15 @@ AUTO_DOWNLOAD_INTERVAL: float = 6 * 60 * 60  # 6 hours
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_proxy() -> Optional[str]:
     """Return the configured proxy URL, if any."""
     return os.environ.get("G4F_PROXY") or os.environ.get("HTTPS_PROXY") or None
 
 
-def _github_request(url: str, timeout: float, accept: str = "application/json") -> bytes:
+def _github_request(
+    url: str, timeout: float, accept: str = "application/json"
+) -> bytes:
     """Perform an HTTP GET against *url* and return the raw body bytes.
 
     Raises:
@@ -88,8 +91,21 @@ def _github_request(url: str, timeout: float, accept: str = "application/json") 
     return urlopen(req, **kwargs).read()
 
 
+def _is_pa_file(name: str) -> bool:
+    """Return ``True`` for PA provider / helper files.
+
+    Accepted: ``*.py``, ``*.wasm``, plus browser scripts named ``pa-*.js``
+    or ``*.pa.js``.
+    """
+    if name.endswith(".py") or name.endswith(".wasm"):
+        return True
+    if name.endswith(".js"):
+        return name.startswith("pa-") or name.endswith(".pa.js")
+    return False
+
+
 def _list_repo_files(repo: str, ref: str, timeout: float) -> List[str]:
-    """Return the list of ``*.pa.py`` paths in the root of *repo* at *ref*.
+    """Return the list of PA provider paths in the root of *repo* at *ref*.
 
     Uses the GitHub contents API.  Subdirectories are not recursed — the
     pa-providers repo is flat by convention.
@@ -104,7 +120,7 @@ def _list_repo_files(repo: str, ref: str, timeout: float) -> List[str]:
         if not isinstance(entry, dict):
             continue
         name = entry.get("name", "")
-        if name.endswith(".pa.py") and entry.get("type") == "file":
+        if _is_pa_file(name) and entry.get("type") == "file":
             files.append(name)
     return files
 
@@ -117,7 +133,11 @@ def _download_raw(repo: str, ref: str, name: str, timeout: float) -> bytes:
 
 def _workspace_target(directory: Optional[str] = None) -> Path:
     """Resolve the target workspace directory, creating it if needed."""
-    target = Path(directory).expanduser() if directory else (get_workspace_dir() / "pa-providers")
+    target = (
+        Path(directory).expanduser()
+        if directory
+        else (get_workspace_dir() / "pa-providers")
+    )
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -125,6 +145,7 @@ def _workspace_target(directory: Optional[str] = None) -> Path:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def run_pa_download(
     repo: str = DEFAULT_REPO,
@@ -162,7 +183,7 @@ def run_pa_download(
         return written
 
     for name in names:
-        if not name.endswith(".pa.py"):
+        if not _is_pa_file(name):
             continue
         dest = target / name
         if dest.exists() and not force:
@@ -176,16 +197,19 @@ def run_pa_download(
         try:
             dest.write_bytes(content)
             written.append(dest)
-            print(f"pa-providers: downloaded {name} -> {dest}")
+            print(f"pa-providers: downloaded {name} ({len(content)} bytes)")
         except OSError as e:
             debug.error(f"pa-providers: failed to write {name}:", e)
 
+    print(f"pa-providers: downloaded {len(written)} file(s) from {repo}@{ref}")
     if written:
         # Touch the auto-download marker so the startup path does not re-download
         # immediately after an explicit `g4f pa download`.
         try:
-            (target / AUTO_DOWNLOAD_MARKER).touch()
-        except OSError:
+            with open(target / AUTO_DOWNLOAD_MARKER, "w") as f:
+                f.write(f"{time.time()}")
+        except OSError as e:
+            print(f"pa-providers: failed to touch auto-download marker: {e}")
             pass
 
     return written
@@ -240,13 +264,16 @@ def run_pa_remove(filename: str, directory: Optional[str] = None) -> bool:
 # Startup auto-download
 # ---------------------------------------------------------------------------
 
+
 def _should_auto_download(workspace: Path) -> bool:
     """Return ``True`` if an automatic download should run now."""
     marker = workspace / AUTO_DOWNLOAD_MARKER
     if not marker.exists():
         return True
     try:
-        age = time.time() - marker.stat().st_mtime
+        with open(marker, "r") as f:
+            timestamp = float(f.read().strip() or "0")
+        age = time.time() - timestamp
     except OSError:
         return True
     return age >= AUTO_DOWNLOAD_INTERVAL
@@ -279,7 +306,7 @@ def auto_download_pa_providers(
 
     debug.log(f"pa-providers: auto-downloading from {repo}@{ref}")
     try:
-        written = run_pa_download(repo=repo, ref=ref, force=force, timeout=timeout)
+        written = run_pa_download(repo=repo, ref=ref, force=True, timeout=timeout)
     except Exception as e:
         # run_pa_download already swallows most errors, but be defensive.
         debug.error("pa-providers: auto-download failed:", e)

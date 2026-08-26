@@ -4,30 +4,25 @@ from ...typing import Messages, AsyncResult
 from ..template import OpenaiTemplate
 from ...errors import RateLimitError
 
+
 class Airforce(OpenaiTemplate):
     label = "Api.Airforce"
     url = "https://api.airforce"
     login_url = "https://panel.api.airforce/dashboard"
     base_url = "https://api.airforce/v1"
     working = True
-    needs_auth = True
     active_by_default = True
     use_image_size = True
-    default_model = "gpt-4o-mini"
+    default_model = "unmoderated-gpt"
 
     @classmethod
     async def create_async_generator(
-        cls,
-        model: str,
-        messages: Messages = None,
-        **kwargs
+        cls, model: str, messages: Messages = None, **kwargs
     ) -> AsyncResult:
         ratelimit_message = "Ratelimit Exceeded!"
         buffer = ""
         async for chunk in super().create_async_generator(
-            model=model,
-            messages=messages,
-            **kwargs
+            model=model, messages=messages, **kwargs
         ):
             if not isinstance(chunk, str):
                 yield chunk

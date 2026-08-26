@@ -17,6 +17,7 @@ from aiohttp import BaseConnector, ClientError, ClientSession
 
 try:
     import zendriver as nodriver
+
     has_nodriver = True
 except ImportError:
     has_nodriver = False
@@ -32,6 +33,7 @@ from ...providers.response import (
     RequestLogin,
     TitleGeneration,
     YouTubeResponse,
+    ProviderInfo,
 )
 from ...requests.raise_for_status import raise_for_status
 from ...requests.aiohttp import get_connector
@@ -147,6 +149,7 @@ MODEL_ALIASES = {
     "gemini-3.5-flash-thinking-lite": "gemini-3.5-flash-lite",
     "gemini-3.5-flash-lite-thinking": "gemini-3.5-flash-lite",
     "gemini-flash-lite": "gemini-3.5-flash-lite",
+    **{key: key for key in models.keys()},
 }
 EXPANDED_MODEL_ALIASES = {
     "gemini-2.0-flash-thinking",
@@ -253,8 +256,7 @@ def _resolve_model(model: str, think_override: int = None) -> tuple[str, bool]:
     model = MODEL_ALIASES.get(model, model)
     if model not in models:
         raise ValueError(
-            f"Unknown Gemini model: {model}. "
-            f"Supported models: {', '.join(models)}"
+            f"Unknown Gemini model: {model}. " f"Supported models: {', '.join(models)}"
         )
     expanded_thinking = (
         requested_model in EXPANDED_MODEL_ALIASES
@@ -316,12 +318,12 @@ def _is_xsrf_error(error: Exception, status: int | None) -> bool:
 class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
     label = "Google Gemini"
     url = "https://gemini.google.com"
-    
+
     needs_auth = False
     working = True
     active_by_default = True
     use_nodriver = True
-    
+
     default_model = "gemini-3.6-flash"
     default_image_model = default_model
     default_vision_model = default_model
@@ -330,7 +332,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
     model_aliases = MODEL_ALIASES
 
     synthesize_content_type = "audio/vnd.wav"
-    
+
     _cookies: Cookies = None
     _snlm0e: str = None
     _sid: str = None
@@ -420,7 +422,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         cls,
         session: ClientSession,
         cookies: Cookies,
-        auth_user: int | str = None,
+        auth_user: int | str | None = None,
     ) -> None:
         prefix = _account_prefix(auth_user)
         params = {
@@ -444,9 +446,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         authorization = _make_sapisid_hash(cookies)
         if authorization:
             headers["Authorization"] = authorization
-        data = {
-            "f.req": json.dumps([[["otAQ7b", "[]", None, "generic"]]])
-        }
+        data = {"f.req": json.dumps([[["otAQ7b", "[]", None, "generic"]]])}
         if cls._snlm0e:
             data["at"] = cls._snlm0e
         async with session.post(
@@ -464,6 +464,8 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
 
     @classmethod
     def get_model_headers(cls, model: str) -> dict[str, str]:
+        if model in cls._account_models:
+            return cls._account_models[model].get("headers", {})
         family = MODEL_FAMILIES.get(model)
         # Request field 79 selects the model. Pro additionally needs the
         # account-specific model header or Google silently routes it to Flash.
@@ -480,6 +482,8 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         model: str,
         allow_model_fallback: bool = False,
     ) -> None:
+        if model in cls._account_models:
+            return
         model = MODEL_ALIASES.get(model, model)
         if allow_model_fallback or cls._account_status is None:
             return
@@ -500,7 +504,9 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
             item.get("family") == family and item.get("available")
             for item in cls._account_models.values()
         ):
-            raise ResponseError(f"Gemini model {model!r} is unavailable for this account")
+            raise ResponseError(
+                f"Gemini model {model!r} is unavailable for this account"
+            )
 
     @classmethod
     async def get_quota(cls, **kwargs):
@@ -516,13 +522,54 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         return cls._snlm0e
 
     @classmethod
+    async def get_models(
+        cls,
+        proxy: str | None = None,
+        cookies: Cookies | None = None,
+        connector: BaseConnector | None = None,
+        auth_user: int | str | None = None,
+        **kwargs,
+    ) -> dict[str, dict]:
+        if cookies is not None:
+            cls._cookies = cookies
+        elif cls._cookies is None:
+            cls._cookies = get_cookies(GOOGLE_COOKIE_DOMAIN, False, True)
+        request_cookies = dict(cls._cookies or {})
+        base_connector = get_connector(connector, proxy)
+
+        async with ClientSession(
+            headers=REQUEST_HEADERS,
+            connector=base_connector,
+            **RESPONSE_HEADER_LIMITS,
+        ) as session:
+            metadata_expired = (
+                time.time() - cls._metadata_fetched_at >= METADATA_CACHE_SECONDS
+            )
+            if not cls._metadata_fetched_at or metadata_expired:
+                try:
+                    await cls.fetch_snlm0e(session, request_cookies, auth_user)
+                except (ClientError, MissingAuthError, ResponseError) as error:
+                    cls._metadata_fetched_at = time.time()
+                    debug.log(f"Gemini metadata discovery failed: {error}")
+            models_expired = (
+                time.time() - cls._account_models_fetched_at >= MODEL_CACHE_SECONDS
+            )
+            if not cls._account_models_fetched_at or models_expired:
+                try:
+                    await cls.fetch_account_models(session, request_cookies, auth_user)
+                except (ClientError, ResponseError, ValueError) as error:
+                    cls._account_models_fetched_at = time.time()
+                    debug.log(f"Gemini model discovery failed: {error}")
+        return {key: value for key, value in cls._account_models.items() if value.get("available")}
+
+    @classmethod
     async def create_async_generator(
         cls,
         model: str,
         messages: Messages,
-        proxy: str = None,
-        cookies: Cookies = None,
-        connector: BaseConnector = None,
+        proxy: str | None = None,
+        cookies: Cookies | None = None,
+        connector: BaseConnector | None = None,
         media: MediaListType = None,
         return_conversation: bool = True,
         conversation: Conversation = None,
@@ -532,7 +579,7 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         auth_user: int | str = None,
         think_override: int = None,
         expanded_thinking: bool = None,
-        **kwargs
+        **kwargs,
     ) -> AsyncResult:
         messages = _normalize_messages(messages)
         model = model or cls.default_model
@@ -559,7 +606,6 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                 "high": 1,
                 "xhigh": 0,
             }.get(kwargs.get("reasoning_effort"))
-        model, expanded_thinking = _resolve_model(model, think_override)
         if cookies is not None:
             cls._cookies = cookies
         elif cls._cookies is None:
@@ -615,20 +661,24 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
             )
             if not cls._account_models_fetched_at or models_expired:
                 try:
-                    await cls.fetch_account_models(
-                        session, request_cookies, auth_user
-                    )
+                    await cls.fetch_account_models(session, request_cookies, auth_user)
                 except (ClientError, ResponseError, ValueError) as error:
                     cls._account_models_fetched_at = time.time()
                     debug.log(f"Gemini model discovery failed: {error}")
+            if model not in cls._account_models:
+                model, expanded_thinking = _resolve_model(model, think_override)
+            else:
+                yield ProviderInfo(**cls.get_dict(), model=cls._account_models[model]["label"])
+                expanded_thinking = (
+                    model in EXPANDED_MODEL_ALIASES
+                    if think_override is None
+                    else think_override <= 2
+                )
             cls.validate_model_access(
                 model,
                 allow_model_fallback=bool(kwargs.get("allow_model_fallback", False)),
             )
-            if (
-                cls.auto_refresh
-                and GOOGLE_SID_COOKIE in request_cookies
-            ):
+            if cls.auto_refresh and GOOGLE_SID_COOKIE in request_cookies:
                 secure_1psid = request_cookies[GOOGLE_SID_COOKIE]
                 task = cls.rotate_tasks.get(secure_1psid)
                 if task is None or task.done():
@@ -645,25 +695,32 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                 request_cookies,
             )
             params = {
-                'bl': cls._bl,
-                'hl': language,
-                '_reqid': random.randint(100_000, 999_999),
-                'rt': 'c',
+                "bl": cls._bl,
+                "hl": language,
+                "_reqid": random.randint(100_000, 999_999),
+                "rt": "c",
             }
             if cls._sid:
                 params["f.sid"] = cls._sid
             request_uuid = str(uuid.uuid4()).upper()
             data = {
-                'f.req': json.dumps([None, json.dumps(cls.build_request(
-                    prompt,
-                    model=model,
-                    expanded_thinking=expanded_thinking,
-                    language=language,
-                    conversation=conversation,
-                    uploads=uploads,
-                    tools=kwargs.get("tools"),
-                    request_uuid=request_uuid,
-                ))])
+                "f.req": json.dumps(
+                    [
+                        None,
+                        json.dumps(
+                            cls.build_request(
+                                prompt,
+                                model=model,
+                                expanded_thinking=expanded_thinking,
+                                language=language,
+                                conversation=conversation,
+                                uploads=uploads,
+                                tools=kwargs.get("tools"),
+                                request_uuid=request_uuid,
+                            )
+                        ),
+                    ]
+                )
             }
             if cls._snlm0e:
                 data["at"] = cls._snlm0e
@@ -678,16 +735,16 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
             model_headers = cls.get_model_headers(model)
             if model_headers:
                 request_headers.update(model_headers)
-                request_headers["x-goog-ext-525005358-jspb"] = (
-                    f'["{request_uuid}",1]'
-                )
+                request_headers["x-goog-ext-525005358-jspb"] = f'["{request_uuid}",1]'
             max_retries = max(0, int(kwargs.get("max_retries", 2)))
             stream_timeout = kwargs.get("stream_timeout", 120)
             if stream_timeout is not None:
                 try:
                     stream_timeout = float(stream_timeout)
                 except (TypeError, ValueError) as exc:
-                    raise ValueError("stream_timeout must be a positive number or None") from exc
+                    raise ValueError(
+                        "stream_timeout must be a positive number or None"
+                    ) from exc
                 if stream_timeout <= 0:
                     raise ValueError("stream_timeout must be a positive number or None")
             response = None
@@ -740,8 +797,14 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                             retry_after = float(response.headers.get("Retry-After", ""))
                         except ValueError:
                             pass
-                    delay = retry_after if retry_after is not None else min(2 ** attempt, 30)
-                    await asyncio.sleep(delay + random.uniform(0, 0.25 * max(delay, 0.01)))
+                    delay = (
+                        retry_after
+                        if retry_after is not None
+                        else min(2**attempt, 30)
+                    )
+                    await asyncio.sleep(
+                        delay + random.uniform(0, 0.25 * max(delay, 0.01))
+                    )
             if response is None:
                 raise ResponseError("Gemini request failed without a response")
             async with response:
@@ -775,7 +838,11 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                         if response_part is None:
                             continue
                         yield JsonResponse(data=response_part, model=model)
-                        if len(response_part) > 2 and isinstance(response_part[2], dict) and response_part[2].get("11"):
+                        if (
+                            len(response_part) > 2
+                            and isinstance(response_part[2], dict)
+                            and response_part[2].get("11")
+                        ):
                             yield TitleGeneration(response_part[2].get("11"))
                         if len(response_part) < 5:
                             continue
@@ -794,36 +861,54 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                                 )
                             except (IndexError, TypeError):
                                 pass
+
                         def find_youtube_ids(content: str):
-                            pattern = re.compile(r"https?://www.youtube.com/watch\?v=([\w-]+)")
+                            pattern = re.compile(
+                                r"https?://www.youtube.com/watch\?v=([\w-]+)"
+                            )
                             for match in pattern.finditer(content):
                                 if match.group(1) not in youtube_ids:
                                     yield match.group(1)
+
                         content = _extract_response_content(response_part)
                         if content is None:
                             continue
                         if routed_model is None:
-                            current_routed_model = _get_nested_value(response_part, [42])
+                            current_routed_model = _get_nested_value(
+                                response_part, [42]
+                            )
                             if isinstance(current_routed_model, str):
                                 routed_model = current_routed_model
-                                if model == "gemini-3.1-pro" and "flash" in routed_model.lower():
+                                if (
+                                    model == "gemini-3.1-pro"
+                                    and "flash" in routed_model.lower()
+                                ):
                                     debug.log(
                                         f"Gemini routed {model!r} to {routed_model!r}"
                                     )
                         reasoning = _extract_reasoning(response_part)
                         if reasoning:
                             reasoning = re.sub(r"<b>|</b>", "**", reasoning)
+
                             def replace_image(match):
                                 return f"![](https:{match.group(0)})"
-                            reasoning = re.sub(r"//yt3.(?:ggpht.com|googleusercontent.com/ytc)/[\w=-]+", replace_image, reasoning)
+
+                            reasoning = re.sub(
+                                r"//yt3.(?:ggpht.com|googleusercontent.com/ytc)/[\w=-]+",
+                                replace_image,
+                                reasoning,
+                            )
                             reasoning = re.sub(r"\nyoutube\n", "\n\n\n", reasoning)
                             reasoning = re.sub(r"\nyoutube_tool\n", "\n\n", reasoning)
                             reasoning = re.sub(r"\nYouTube\n", "\nYouTube ", reasoning)
-                            reasoning = reasoning.replace('\nhttps://www.gstatic.com/images/branding/productlogos/youtube/v9/192px.svg', '<i class="fa-brands fa-youtube"></i>')
+                            reasoning = reasoning.replace(
+                                "\nhttps://www.gstatic.com/images/branding/productlogos/youtube/v9/192px.svg",
+                                '<i class="fa-brands fa-youtube"></i>',
+                            )
                             reasoning_youtube_ids = list(find_youtube_ids(reasoning))
                             youtube_ids.extend(reasoning_youtube_ids)
                             if reasoning.startswith(last_reasoning):
-                                reasoning_delta = reasoning[len(last_reasoning):]
+                                reasoning_delta = reasoning[len(last_reasoning) :]
                             elif last_reasoning.startswith(reasoning):
                                 reasoning_delta = ""
                             else:
@@ -838,27 +923,42 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                             raise e
                         debug.error(f"{cls.__name__} {type(e).__name__}: {e}")
                         continue
-                    match = re.search(r'\[Imagen of (.*?)\]', content)
+                    match = re.search(r"\[Imagen of (.*?)\]", content)
                     if match:
                         image_prompt = match.group(1)
-                        content = content.replace(match.group(0), '')
+                        content = content.replace(match.group(0), "")
                     pattern = r"http://googleusercontent.com/(?:image_generation|youtube|map)_content/\d+"
                     content = re.sub(pattern, "", content)
                     content = content.replace("<!-- end list -->", "")
-                    content = content.replace("<ctrl94>thought", "<think>").replace("<ctrl95>", "</think>")
+                    content = content.replace("<ctrl94>thought", "<think>").replace(
+                        "<ctrl95>", "</think>"
+                    )
                     content = INTERNAL_CODE_PATTERN.sub("", content)
+
                     def replace_link(match):
                         return f"(https://{quote_plus(unquote_plus(match.group(1)), '/?&=#')})"
-                    content = re.sub(r"\(https://www.google.com/(?:search\?q=|url\?sa=E&source=gmail&q=)https?://(.+?)\)", replace_link, content)
+
+                    content = re.sub(
+                        r"\(https://www.google.com/(?:search\?q=|url\?sa=E&source=gmail&q=)https?://(.+?)\)",
+                        replace_link,
+                        content,
+                    )
 
                     if last_content and content.startswith(last_content):
-                        yield content[len(last_content):]
+                        yield content[len(last_content) :]
                     else:
                         yield content
                     last_content = content
                     has_images = False
                     try:
-                        if not images_yielded and len(response_part[4][0]) >= 13 and response_part[4][0][12] and len(response_part[4][0][12]) >= 8 and response_part[4][0][12][7] and response_part[4][0][12][7][0]:
+                        if (
+                            not images_yielded
+                            and len(response_part[4][0]) >= 13
+                            and response_part[4][0][12]
+                            and len(response_part[4][0][12]) >= 8
+                            and response_part[4][0][12][7]
+                            and response_part[4][0][12][7][0]
+                        ):
                             has_images = True
                     except (TypeError, IndexError, KeyError):
                         pass
@@ -870,14 +970,22 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                                 img_data = image[0][3][3]
                                 if isinstance(img_data, list):
                                     for item in img_data:
-                                        if isinstance(item, str) and item.startswith("http"):
+                                        if isinstance(item, str) and item.startswith(
+                                            "http"
+                                        ):
                                             images.append(item + "=s2048")
                                             break
                                 elif isinstance(img_data, str):
                                     images.append(img_data + "=s2048")
                             if images:
-                                prompt = image_prompt.replace("a fake image", "") if image_prompt else "Generated Image"
-                                yield ImageResponse(images, prompt, {"cookies": request_cookies})
+                                prompt = (
+                                    image_prompt.replace("a fake image", "")
+                                    if image_prompt
+                                    else "Generated Image"
+                                )
+                                yield ImageResponse(
+                                    images, prompt, {"cookies": request_cookies}
+                                )
                                 image_prompt = None
                                 images_yielded = True
                         except (TypeError, IndexError, KeyError):
@@ -905,8 +1013,8 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
             async with session.post(
                 "https://gemini.google.com/_/BardChatUi/data/batchexecute",
                 data={
-                      "f.req": json.dumps([[["XqA3Ic", inner_data, None, "generic"]]]),
-                      "at": cls._snlm0e,
+                    "f.req": json.dumps([[["XqA3Ic", inner_data, None, "generic"]]]),
+                    "at": cls._snlm0e,
                 },
                 params={
                     "rpcids": "XqA3Ic",
@@ -915,15 +1023,19 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                     "f.sid": "" if cls._sid is None else cls._sid,
                     "hl": "de",
                     "_reqid": random.randint(1111, 9999),
-                    "rt": "c"
+                    "rt": "c",
                 },
             ) as response:
                 await raise_for_status(response)
-                iter_base64_response = iter_filter_base64(response.content.iter_chunked(1024))
+                iter_base64_response = iter_filter_base64(
+                    response.content.iter_chunked(1024)
+                )
                 async for chunk in iter_base64_decode(iter_base64_response):
                     yield chunk
 
+    @classmethod
     def build_request(
+        cls,
         prompt: str,
         language: str,
         model: str,
@@ -933,11 +1045,13 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         tools: list[list[str]] = None,
         request_uuid: str = None,
     ) -> list:
-        image_list = [[[image_url, 1], image_name] for image_url, image_name in uploads] if uploads else []
+        image_list = (
+            [[[image_url, 1], image_name] for image_url, image_name in uploads]
+            if uploads
+            else []
+        )
         turn_index = (
-            getattr(conversation, "turn_index", 0)
-            if conversation is not None
-            else 0
+            getattr(conversation, "turn_index", 0) if conversation is not None else 0
         )
         request = [None] * 97
         request[0] = [prompt, 0, None, image_list, None, None, 0]
@@ -969,7 +1083,10 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
         request[59] = request_uuid or str(uuid.uuid4())
         request[61] = []
         request[68] = 2
-        request[79] = models[model]["mode"]
+        if model in cls._account_models:
+            request[79] = cls._account_models[model]["mode"]
+        else:
+            request[79] = models[model]["mode"]
         request[80] = 2 if expanded_thinking else 1
         request[91] = 0
         # Gemini Web marks the first turn with 1 and follow-up turns with 0.
@@ -1017,7 +1134,9 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                     await raise_for_status(response)
                     upload_url = response.headers.get("X-Goog-Upload-Url")
                     if not upload_url:
-                        raise ResponseError("Gemini upload did not return an upload URL")
+                        raise ResponseError(
+                            "Gemini upload did not return an upload URL"
+                        )
 
                 async with session.options(
                     upload_url,
@@ -1037,12 +1156,14 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
                     await raise_for_status(response)
                     identifier = (await response.text()).strip()
                     if not identifier:
-                        raise ResponseError("Gemini upload returned an empty identifier")
+                        raise ResponseError(
+                            "Gemini upload returned an empty identifier"
+                        )
                     return [identifier, image_name]
-        return await asyncio.gather(*[
-            upload_image(image, image_name)
-            for image, image_name in media
-        ])
+
+        return await asyncio.gather(
+            *[upload_image(image, image_name) for image, image_name in media]
+        )
 
     @classmethod
     async def fetch_snlm0e(
@@ -1075,7 +1196,8 @@ class Gemini(AsyncGeneratorProvider, ProviderModelMixin):
 
 
 class Conversation(JsonConversation):
-    def __init__(self,
+    def __init__(
+        self,
         conversation_id: str,
         response_id: str,
         choice_id: str,
@@ -1091,7 +1213,7 @@ class Conversation(JsonConversation):
 
 async def iter_filter_base64(chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
     search_for = b'[["wrb.fr","XqA3Ic","[\\"'
-    end_with = b'\\'
+    end_with = b"\\"
     buffer = b""
     is_started = False
     async for chunk in chunks:
@@ -1099,10 +1221,10 @@ async def iter_filter_base64(chunks: AsyncIterator[bytes]) -> AsyncIterator[byte
         if not is_started:
             marker_index = buffer.find(search_for)
             if marker_index < 0:
-                buffer = buffer[-(len(search_for) - 1):]
+                buffer = buffer[-(len(search_for) - 1) :]
                 continue
             is_started = True
-            buffer = buffer[marker_index + len(search_for):]
+            buffer = buffer[marker_index + len(search_for) :]
         end_index = buffer.find(end_with)
         if end_index >= 0:
             if end_index:
@@ -1154,10 +1276,17 @@ async def rotate_1psidts(url, cookies: dict, proxy: str | None = None) -> str:
                 for key, cookie in response.cookies.items():
                     cookies[key] = cookie.value
                 new_1psidts = response.cookies.get("__Secure-1PSIDTS")
-                path.write_text(json.dumps([{
-                    "name": key,
-                    "value": value,
-                    "domain": GOOGLE_COOKIE_DOMAIN,
-                } for key, value in cookies.items()]))
+                path.write_text(
+                    json.dumps(
+                        [
+                            {
+                                "name": key,
+                                "value": value,
+                                "domain": GOOGLE_COOKIE_DOMAIN,
+                            }
+                            for key, value in cookies.items()
+                        ]
+                    )
+                )
                 if new_1psidts:
                     return new_1psidts.value

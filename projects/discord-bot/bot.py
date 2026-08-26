@@ -12,6 +12,8 @@ Features:
   feeds the results back, and produces a final answer.
 - Streaming responses edited in-place for a "typing" effect
 - Configurable model and provider via environment variables
+- Auto-translation: messages in designated channels are translated to English
+- Honeypot: slash commands are silently blocked in designated channels
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from g4f.providers.any_provider import AnyProvider
 from g4f.client import ClientFactory
 
 from mcp_tools import MCPToolManager, ALL_AVAILABLE_TOOLS, SAFE_DEFAULT_TOOLS
+from live_feed import LiveFeed
 
 load_dotenv()
 
@@ -49,6 +52,22 @@ SYSTEM_PROMPT = os.getenv(
 MAX_HISTORY = int(os.getenv("G4F_MAX_HISTORY", "12"))  # messages per user
 PROXY = os.getenv("G4F_PROXY")  # optional, e.g. "socks5://127.0.0.1:1080"
 MAX_TOOL_LOOPS = int(os.getenv("G4F_MAX_TOOL_LOOPS", "4"))  # safety cap
+
+# ---------------------------------------------------------------------------
+# Live feed configuration
+# ---------------------------------------------------------------------------
+# When set, the bot posts a live activity feed to this Discord channel:
+# image thumbnails, tool calls, file edits, heavy token usage, server
+# errors, new g4f.dev users, and periodic summaries.
+LIVE_FEED_CHANNEL = int(os.getenv("G4F_LIVE_FEED_CHANNEL", "0") or "0")
+API_BASE = os.getenv("G4F_API_BASE", "http://localhost:8080")
+PUBLIC_BASE = os.getenv("G4F_PUBLIC_BASE", API_BASE)
+PUBLIC_API_KEY = os.getenv("G4F_PUBLIC_API_KEY", "")
+MEMBERS_BASE = os.getenv("G4F_MEMBERS_BASE", "https://auth.g4f.dev")
+FEED_POLL_INTERVAL = int(os.getenv("G4F_FEED_POLL_INTERVAL", "15"))
+HEAVY_TOKEN_THRESHOLD = int(os.getenv("G4F_HEAVY_TOKEN_THRESHOLD", "10000"))
+FEED_SUMMARY_INTERVAL = int(os.getenv("G4F_FEED_SUMMARY_INTERVAL", "3600"))
+FEED_MAX_POSTS_PER_CYCLE = int(os.getenv("G4F_FEED_MAX_POSTS_PER_CYCLE", "5"))
 
 # Simple validation for runtime model names.
 ALLOWED_MODEL_CHARS = set(
@@ -83,7 +102,27 @@ histories: Dict[int, Deque[dict]] = defaultdict(lambda: deque(maxlen=MAX_HISTORY
 intents = discord.Intents.default()
 intents.message_content = True  # required to read user messages
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ---------------------------------------------------------------------------
+# Honeypot: silently ignore slash commands in designated channels
+# ---------------------------------------------------------------------------
+class HoneypotTree(app_commands.CommandTree):
+    """Custom command tree that blocks slash commands in honeypot channels."""
+
+    async def interaction_check(
+        self, interaction: discord.Interaction, /
+    ) -> bool:
+        if HONEYPOT_CHANNELS and interaction.channel_id in HONEYPOT_CHANNELS:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "🚫 Commands are not allowed in this channel.",
+                    ephemeral=True,
+                )
+            return False
+        return True
+
+
+bot = commands.Bot(command_prefix="!", intents=intents, tree_cls=HoneypotTree)
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +137,37 @@ _image_channels_env = os.getenv("G4F_IMAGE_CHANNELS", "")
 IMAGE_CHANNELS = {
     int(x.strip())
     for x in _image_channels_env.split(",")
+    if x.strip().isdigit()
+}
+
+# ---------------------------------------------------------------------------
+# Auto-translation channels
+# ---------------------------------------------------------------------------
+# If enabled, the bot listens to messages in the given channel(s) and
+# auto-translates them to English, posting the translation as a reply.
+#
+# Env vars:
+# - G4F_TRANSLATE_CHANNELS: comma-separated channel ids (required to enable)
+_translate_channels_env = os.getenv("G4F_TRANSLATE_CHANNELS", "")
+TRANSLATE_CHANNELS = {
+    int(x.strip())
+    for x in _translate_channels_env.split(",")
+    if x.strip().isdigit()
+}
+
+# ---------------------------------------------------------------------------
+# Honeypot channels
+# ---------------------------------------------------------------------------
+# Slash commands are silently ignored in these channels.  Useful for
+# channels where you don't want bot command spam (e.g. announcement or
+# honeypot/trap channels).
+#
+# Env vars:
+# - G4F_HONEYPOT_CHANNELS: comma-separated channel ids
+_honeypot_channels_env = os.getenv("G4F_HONEYPOT_CHANNELS", "")
+HONEYPOT_CHANNELS = {
+    int(x.strip())
+    for x in _honeypot_channels_env.split(",")
     if x.strip().isdigit()
 }
 
@@ -557,10 +627,26 @@ async def on_message(message: discord.Message):
     # Let slash commands etc. work as usual.
     await bot.process_commands(message)
 
-    if not IMAGE_CHANNELS:
+    if message.author.bot:
         return
 
-    if message.author.bot:
+    # --- Auto-translation to English ---
+    if TRANSLATE_CHANNELS and message.channel.id in TRANSLATE_CHANNELS:
+        content = message.content.strip()
+        if content:
+            try:
+                translation = await _translate_to_english(content)
+                if translation and translation != content:
+                    await message.reply(
+                        f"🌐 **English:** {_truncate(translation, 1850)}",
+                        mention_author=False,
+                    )
+            except Exception as e:
+                log.exception("Auto translation failed")
+        return  # don't fall through to image generation in translate channels
+
+    # --- Auto image generation ---
+    if not IMAGE_CHANNELS:
         return
 
     if message.channel.id not in IMAGE_CHANNELS:
@@ -621,6 +707,31 @@ async def _finalize_response(
 
 
 # ---------------------------------------------------------------------------
+# Translation
+# ---------------------------------------------------------------------------
+TRANSLATE_SYSTEM_PROMPT = (
+    "You are a translation engine. Translate the user's message into English. "
+    "Output ONLY the translation — no explanations, no notes, no quotes. "
+    "If the text is already in English, output it unchanged."
+)
+
+
+async def _translate_to_english(text: str) -> str:
+    """Translate *text* to English via g4f and return the translation."""
+    messages = [
+        {"role": "system", "content": TRANSLATE_SYSTEM_PROMPT},
+        {"role": "user", "content": text},
+    ]
+    response = await client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        stream=False,
+        proxy=PROXY,
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+# ---------------------------------------------------------------------------
 # Image generation
 # ---------------------------------------------------------------------------
 async def _generate_image(prompt: str, model: str) -> str:
@@ -646,6 +757,28 @@ async def on_ready():
         log.info("Synced %d slash commands", len(synced))
     except Exception:
         log.exception("Failed to sync slash commands")
+
+    # Load the live feed cog if a channel was configured.
+    if LIVE_FEED_CHANNEL:
+        existing = bot.get_cog("LiveFeed")
+        if existing is None:
+            await bot.add_cog(
+                LiveFeed(
+                    bot=bot,
+                    channel_id=LIVE_FEED_CHANNEL,
+                    api_base=API_BASE,
+                    public_base=PUBLIC_BASE,
+                    api_key=PUBLIC_API_KEY,
+                    members_base=MEMBERS_BASE or None,
+                    poll_interval=FEED_POLL_INTERVAL,
+                    heavy_token_threshold=HEAVY_TOKEN_THRESHOLD,
+                    summary_interval=FEED_SUMMARY_INTERVAL,
+                    max_posts_per_cycle=FEED_MAX_POSTS_PER_CYCLE,
+                )
+            )
+            log.info("Live feed cog loaded → channel %s", LIVE_FEED_CHANNEL)
+        else:
+            log.info("Live feed cog already loaded")
 
 
 def main():

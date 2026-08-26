@@ -5,34 +5,43 @@ import json
 from ..image.copy_images import secure_filename
 from ..cookies import get_cookies_dir
 
-class FileStorage():
-    def __init__(self, storage_dir: str = None):
+
+class FileStorage:
+    def __init__(self, storage_dir: "str | None" = None):
         if storage_dir is None:
             storage_dir = os.path.join(get_cookies_dir(), ".models")
         self.storage_dir = storage_dir
 
     def get_file(self, key: str) -> str:
-        return os.path.join(self.storage_dir, *[secure_filename(part) for part in key.split("/")]) + ".json"
+        return (
+            os.path.join(
+                self.storage_dir, *[secure_filename(part) for part in key.split("/")]
+            )
+            + ".json"
+        )
 
     def set(self, key: str, value: str):
         file = self.get_file(key)
         dirname = os.path.dirname(file)
         if not os.path.exists(dirname):
             os.makedirs(dirname)
-        with open(file, "w", encoding="utf-8") as f:
-            json.dump(value, f)
+        try:
+            with open(file, "w", encoding="utf-8") as f:
+                json.dump(value, f)
+        except Exception as e:
+            print(f"Error writing to {file}: {e}")
 
     def get(self, key: str) -> str | None:
         try:
             with open(self.get_file(key), "r", encoding="utf-8") as f:
                 return json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
             return None
 
     def delete(self, key: str):
         try:
             os.remove(self.get_file(key))
-        except FileNotFoundError:
+        except (FileNotFoundError, OSError) as e:
             pass
 
     def clear(self):
